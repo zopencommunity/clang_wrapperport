@@ -1,0 +1,166 @@
+###
+### Build control file for the clang_wrapper port
+###
+
+###
+### Required Environment Variables
+###
+export ZOPEN_RUNTIME_DEPS="check_clang zoslib"
+# export ZOPEN_SYSTEM_PREREQ="zos25" # optional system pre-req (default=zos25)
+
+
+###
+### Build settings (Port type: BARE, Build system: N/A)
+###
+### Settings for BARE (binary) port
+export ZOPEN_TYPE="BARE"
+export ZOPEN_BOOTSTRAP="skip"
+export ZOPEN_CONFIGURE="skip"
+export ZOPEN_MAKE="skip"
+export ZOPEN_CHECK="skip"
+export ZOPEN_INSTALL="zopen_custom_install"
+export ZOPEN_NAME="clang_zos_wrapper"
+
+###
+### Required user-supplied functions
+###
+
+zopen_check_results() {
+  dir="$1" 
+  pfx="$2" 
+  chk="$1/$2_check.log"
+  # Add logic to extract the test results here:
+  echo "actualFailures:0" 
+  echo "totalTests:1" 
+  echo "expectedFailures:0"
+  echo "expectedTotalTests:1"
+}
+
+zopen_get_version() {
+  echo "1.0.0" # Modify to echo the version of your tool/library
+}
+
+
+###
+### Custom Build Logic (if applicable)
+###
+
+# zopen_init is used to download the binary artifact.
+zopen_init() {
+  # Example: curl -L -o clang_wrapper.war ${ZOPEN_STABLE_URL}
+  echo "BARE port zopen_init hook needs to be implemented to download the artifact."
+}
+
+zopen_custom_install() {
+  mkdir -p "${ZOPEN_INSTALL_DIR}/bin"
+  cp -r $ZOPEN_ROOT/bin/* $ZOPEN_INSTALL_DIR/bin
+}
+
+###
+### Optional User-Supplied Hooks (uncomment to use)
+###
+
+zopen_append_to_env() {
+cat <<'ZZ'
+
+if [ -z "\$ZOPEN_IN_ZOPEN_BUILD" ]; then
+   return 0; # Do nothing outside zopen build
+fi
+
+# Source dependency environments and collect their flags
+deps="../../check_clang/check_clang ../../zoslib/zoslib"
+
+for dep in $deps; do
+  [ -f "$dep/.env" ] || continue
+  
+  # Save current directory and ZOPEN_EXTRA_* variables
+  saved_pwd="$(pwd)"
+  saved_CFLAGS="${ZOPEN_EXTRA_CFLAGS-}"
+  saved_CXXFLAGS="${ZOPEN_EXTRA_CXXFLAGS-}"
+  saved_CPPFLAGS="${ZOPEN_EXTRA_CPPFLAGS-}"
+  saved_LDFLAGS="${ZOPEN_EXTRA_LDFLAGS-}"
+  saved_LIBS="${ZOPEN_EXTRA_LIBS-}"
+  
+  # Source the dependency (cd to make relative paths work)
+  cd "$dep" 2>/dev/null && . "./.env" >/dev/null 2>&1
+  cd "$saved_pwd" 2>/dev/null || true
+  
+  # Accumulate flags from this dependency
+  REAL_CC="${REAL_CC:-${CC-}}"
+  REAL_CXX="${REAL_CXX:-${CXX-}}"
+  EXTRA_CFLAGS="${EXTRA_CFLAGS:+$EXTRA_CFLAGS }${ZOPEN_EXTRA_CFLAGS-}"
+  EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:+$EXTRA_CXXFLAGS }${ZOPEN_EXTRA_CXXFLAGS-}"
+  EXTRA_CPPFLAGS="${EXTRA_CPPFLAGS:+$EXTRA_CPPFLAGS }${ZOPEN_EXTRA_CPPFLAGS-}"
+  EXTRA_LDFLAGS="${EXTRA_LDFLAGS:+$EXTRA_LDFLAGS }${ZOPEN_EXTRA_LDFLAGS-}"
+  EXTRA_LIBS="${EXTRA_LIBS:+$EXTRA_LIBS }${ZOPEN_EXTRA_LIBS-}"
+  
+  # Restore ZOPEN_EXTRA_* variables
+  ZOPEN_EXTRA_CFLAGS="$saved_CFLAGS"
+  ZOPEN_EXTRA_CXXFLAGS="$saved_CXXFLAGS"
+  ZOPEN_EXTRA_CPPFLAGS="$saved_CPPFLAGS"
+  ZOPEN_EXTRA_LDFLAGS="$saved_LDFLAGS"
+  ZOPEN_EXTRA_LIBS="$saved_LIBS"
+done
+
+# Export variables for clang-zos-wrapper
+export REAL_CC REAL_CXX EXTRA_CPPFLAGS EXTRA_CFLAGS EXTRA_CXXFLAGS EXTRA_LDFLAGS EXTRA_LIBS
+
+# Set CC and CXX to use the wrapper
+unset CC CXX
+export CC="clang-zos-wrapper"
+export CXX="clang-zos-wrapper"
+ZZ
+}
+
+#
+#zopen_append_to_setup(){
+#  ## This function runs as part of generation of the setup.sh file. The output of
+#  ## the function is appended to setup.sh.
+#}
+#
+#zopen_append_to_validate_install(){
+#  ## This function runs as part of generation of the install_test.sh file. The
+#  ## output of the function is appended to install_test.sh script.
+#}
+#
+#zopen_install_caveats(){
+#  ## This function is run post install. All stdout messages are captured and
+#  ## added to the metadata.json as installation caveats.
+#}
+#
+#zopen_init(){
+#  ## This function runs after code is downloaded and patched but before the code
+#  ## is built.
+#}
+#
+#zopen_post_buildenv(){
+#  ## This function runs after the 'buildenv' is processed.
+#}
+#
+#zopen_pre_build(){
+#  ## This function runs before the 'make' step of the build is run.
+#}
+#
+#zopen_pre_check(){
+#  ## This function runs before the 'check' step of the build is run.
+#}
+#
+#zopen_pre_configure(){
+#  ## This function runs before the 'configure' step of the build is run.
+#}
+#
+#zopen_pre_install(){
+#  ## This function runs before the 'install' step of the build is run.
+#}
+#
+zopen_post_install(){
+  rm $1/.depsenv
+}
+#
+#zopen_pre_patch(){
+#  ## This function runs before the 'patch' step of the build is run.
+#}
+#
+#zopen_pre_terminate(){
+#  ## This function runs before 'zopen build' terminates.
+#}

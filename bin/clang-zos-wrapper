@@ -1,0 +1,220 @@
+#!/bin/sh
+# clang-zos-wrapper - Intelligent compiler wrapper for z/OS
+#
+# This wrapper injects extra compiler flags based on the compilation phase.
+# It detects whether the compiler is preprocessing, compiling, or linking,
+# and applies the appropriate flags for each phase.
+#
+# Environment Variables:
+#   REAL_CC         - The actual C compiler to invoke (default: cc)
+#   REAL_CXX        - The actual C++ compiler to invoke (default: c++)
+#   EXTRA_CPPFLAGS  - Preprocessor flags (applied during preprocessing/compiling)
+#   EXTRA_CFLAGS    - C compiler flags (applied during C compiling)
+#   EXTRA_CXXFLAGS  - C++ compiler flags (applied during C++ compiling)
+#   EXTRA_LDFLAGS   - Linker flags (applied during linking)
+#   EXTRA_LIBS      - Linker libraries (applied during linking)
+#   DEBUG_WRAPPER   - Set to 1 to enable debug output (default: 0)
+#
+# Note: EXTRA_* variables are intentionally word-split to allow multiple flags.
+# Flags containing spaces are not supported.
+
+REAL_CC="${REAL_CC:-cc}"
+REAL_CXX="${REAL_CXX:-c++}"
+EXTRA_CPPFLAGS="${EXTRA_CPPFLAGS:-}"
+EXTRA_CFLAGS="${EXTRA_CFLAGS:-}"
+EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-}"
+EXTRA_LDFLAGS="${EXTRA_LDFLAGS:-}"
+EXTRA_LIBS="${EXTRA_LIBS:-}"
+DEBUG_WRAPPER="${DEBUG_WRAPPER:-0}"
+
+# Detect if this is a C++ compiler invocation based on the script name
+script_name="$(basename "$0")"
+is_cxx=0
+case "$script_name" in
+  *++*|*cxx*) is_cxx=1 ;;
+esac
+
+# Note: Compiler selection happens after source file detection
+# to handle cases where C++ sources are compiled with CC
+
+# Helper function: Check if argument is a source file
+# Recognizes common source file extensions for C, C++, Fortran, and assembly
+is_source() {
+  case "$1" in
+    *.c|*.cc|*.cpp|*.cxx|*.C|*.m|*.mm|*.f|*.for|*.f90|*.s|*.S|*.i|*.ii) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Helper function: Check if argument is a C++ source file
+is_cxx_source() {
+  case "$1" in
+    *.cc|*.cpp|*.cxx|*.C|*.mm|*.ii) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Helper function: Check if argument is an object file or library
+# Used to detect linking phase when no source files are present
+is_object_or_lib() {
+  case "$1" in
+    *.o|*.obj|*.a|*.so|*.dll|*.lib) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Phase 1: Detect compilation phase from command-line flags
+# - Preprocessing only: -E, -M, -MM
+# - Compile only: -c, -S
+# - Linking: default when neither of the above is present
+preprocess_only=0
+compile_only=0
+for a in "$@"; do
+  case "$a" in
+    -E|-M|-MM) preprocess_only=1; break ;;
+    -c|-S)     compile_only=1; break ;;
+  esac
+done
+
+# Phase 2: Scan arguments to detect source files and object/library files
+# This helps determine if we're compiling, linking, or both
+# Also detect if we're compiling C++ code
+# Skip this scan if we already know it's preprocess-only or compile-only
+has_source=0
+has_cxx_source=0
+has_objlib=0
+prev_is_x=0
+treat_unrecognized_as_source=0
+explicit_lang=""
+
+if [ "$preprocess_only" -eq 0 ] && [ "$compile_only" -eq 0 ]; then
+  for a in "$@"; do
+    # Handle -x flag which specifies the language explicitly
+    # After -x, the next argument is the language type
+    if [ "$prev_is_x" -eq 1 ]; then
+      prev_is_x=0
+      explicit_lang="$a"
+      case "$a" in
+        c++|cpp|cxx) is_cxx=1; treat_unrecognized_as_source=1 ;;
+        c|assembler) treat_unrecognized_as_source=1 ;;
+      esac
+      continue
+    fi
+    case "$a" in
+      -x) prev_is_x=1; continue ;;
+      -*) continue ;;  # Skip all other options
+    esac
+    
+    # Classify non-option arguments
+    if is_source "$a"; then
+      has_source=1
+      if is_cxx_source "$a"; then
+        has_cxx_source=1
+        is_cxx=1
+      fi
+    elif is_object_or_lib "$a"; then
+      has_objlib=1
+    else
+      # If -x was used, treat unrecognized files as source
+      if [ "$treat_unrecognized_as_source" -eq 1 ]; then
+        has_source=1
+        [ "$explicit_lang" = "c++" ] || [ "$explicit_lang" = "cpp" ] || [ "$explicit_lang" = "cxx" ] && has_cxx_source=1
+      fi
+    fi
+  done
+fi
+
+# Select the appropriate compiler based on language detection
+if [ "$is_cxx" -eq 1 ]; then
+  REAL_COMPILER="$REAL_CXX"
+else
+  REAL_COMPILER="$REAL_CC"
+fi
+
+# Verify the real compiler exists before proceeding
+if ! command -v "$REAL_COMPILER" >/dev/null 2>&1; then
+  echo "Error: Compiler '$REAL_COMPILER' not found in PATH" >&2
+  exit 1
+fi
+
+# Phase 3: Decide which extra flags to apply based on the compilation phase
+# Logic:
+# - Preprocessing only: Apply CPPFLAGS
+# - Compile only: Apply CPPFLAGS + CFLAGS/CXXFLAGS
+# - Compile + Link (has source): Apply CPPFLAGS + CFLAGS/CXXFLAGS + LDFLAGS + LIBS
+# - Link only (has objects/libs): Apply LDFLAGS + LIBS
+# - Fallback (unknown): Treat as link-only
+apply_cppflags=0
+apply_cflags=0
+apply_ldflags=0
+apply_libs=0
+
+if [ "$preprocess_only" -eq 1 ]; then
+  # Preprocessing phase: only preprocessor flags needed
+  apply_cppflags=1
+else
+  if [ "$compile_only" -eq 1 ]; then
+    # Compile phase: preprocessor + compiler flags
+    apply_cppflags=1
+    apply_cflags=1
+  else
+    # Linking phase or compile+link
+    if [ "$has_source" -eq 1 ]; then
+      # Compile and link: all flags needed
+      apply_cppflags=1
+      apply_cflags=1
+      apply_ldflags=1
+      apply_libs=1
+    elif [ "$has_objlib" -eq 1 ]; then
+      # Link only: just linker flags
+      apply_ldflags=1
+      apply_libs=1
+    else
+      # Fallback: treat as link-only (e.g., creating executables from archives)
+      apply_ldflags=1
+      apply_libs=1
+    fi
+  fi
+fi
+
+# Debug output if enabled
+if [ "$DEBUG_WRAPPER" -eq 1 ]; then
+  echo "DEBUG: Compiler detection:" >&2
+  echo "  script_name=$script_name" >&2
+  echo "  is_cxx=$is_cxx" >&2
+  echo "  REAL_COMPILER=$REAL_COMPILER" >&2
+  echo "DEBUG: Compilation phase detection:" >&2
+  echo "  preprocess_only=$preprocess_only" >&2
+  echo "  compile_only=$compile_only" >&2
+  echo "  has_source=$has_source" >&2
+  echo "  has_cxx_source=$has_cxx_source" >&2
+  echo "  has_objlib=$has_objlib" >&2
+  echo "DEBUG: Flags to apply:" >&2
+  echo "  apply_cppflags=$apply_cppflags" >&2
+  echo "  apply_cflags=$apply_cflags" >&2
+  echo "  apply_ldflags=$apply_ldflags" >&2
+  echo "  apply_libs=$apply_libs" >&2
+fi
+
+# Phase 4: Inject the appropriate flags
+# Prepend CPPFLAGS/CFLAGS/CXXFLAGS (word-splitting by set --) and append LDFLAGS/LIBS
+# Note: Intentional word-splitting allows multiple flags in each variable
+if [ "$apply_cppflags" -eq 1 ] && [ -n "$EXTRA_CPPFLAGS" ]; then
+  set -- $EXTRA_CPPFLAGS "$@"
+fi
+if [ "$apply_cflags" -eq 1 ]; then
+  if [ "$is_cxx" -eq 1 ] && [ -n "$EXTRA_CXXFLAGS" ]; then
+    set -- $EXTRA_CXXFLAGS "$@"
+  elif [ -n "$EXTRA_CFLAGS" ]; then
+    set -- $EXTRA_CFLAGS "$@"
+  fi
+fi
+if [ "$apply_ldflags" -eq 1 ] && [ -n "$EXTRA_LDFLAGS" ]; then
+  set -- $EXTRA_LDFLAGS "$@"
+fi
+if [ "$apply_libs" -eq 1 ] && [ -n "$EXTRA_LIBS" ]; then
+  set -- "$@" $EXTRA_LIBS
+fi
+
+# Execute the real compiler with the modified arguments
+exec "$REAL_COMPILER" "$@"
