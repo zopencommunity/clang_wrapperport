@@ -7,8 +7,7 @@ node('linux') {
   stage('Build') {
     build job: 'Port-Pipeline', parameters: [
       string(name: 'PORT_GITHUB_REPO', value: 'https://github.com/zopencommunity/clang_wrapperport.git'),
-      string(name: 'PORT_DESCRIPTION', value: 'Wrapper script which includes compiler with required flag along with zoslib [D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dcompiler flags and zoslib params.'),
-      string(name: 'BUILD_LINE', value: 'DEV')
+      string(name: 'PORT_DESCRIPTION', value: 'Wrapper script which includes compiler with required flag along with zoslib compiler flags and zoslib params.'),
     ]
   }
 }
