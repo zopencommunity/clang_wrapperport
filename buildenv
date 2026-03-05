@@ -63,7 +63,7 @@ zopen_custom_install() {
 zopen_append_to_env() {
 cat <<'ZZ'
 
-if [ -z "\$ZOPEN_IN_ZOPEN_BUILD" ]; then
+if [ -z "$ZOPEN_IN_ZOPEN_BUILD" ]; then
    return 0; # Do nothing outside zopen build
 fi
 
